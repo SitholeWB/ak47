@@ -2,6 +2,10 @@
 
 A fast-paced, responsive strategy card game built with HTML5 Canvas and JavaScript. Challenge a smart AI to see who can assemble the legendary **AK47** hand first!
 
+**[▶ Click Here to Play the Game](https://sitholewb.github.io/ak47/)**
+
+---
+
 ## 🃏 How to Play
 
 The objective is simple: be the first player to hold the cards **Ace (A), King (K), 4, and 7** in your hand.
@@ -15,28 +19,27 @@ The objective is simple: be the first player to hold the cards **Ace (A), King (
 
 ## 🤖 AI Difficulty Levels
 
-- **Easy:** The computer's hand is visible. This is great for learning the mechanics.
-- **Medium:** The computer's hand is hidden. You must track the discard pile to guess what they have.
-- **Difficult:** The "Machine" mode. The AI tracks your discards. If you throw away a card, the AI knows you don't need it and will use that information to block you or optimize its own hand.
+- **Easy:** The computer's hand is visible. Great for learning the mechanics.
+- **Medium:** The computer's hand is hidden. You must track the discard pile to guess their strategy.
+- **Difficult (Machine):** The AI tracks your discards. If you throw away a card, the AI remembers you don't need it and will use that information to block you or optimize its own hand.
 
 ## 🚀 Features
 
-- **Mobile Friendly:** Fully responsive design with touch support (drag and drop).
+- **Mobile First:** Fully responsive design with touch support (drag and drop optimized for glass).
 - **Input Locking:** The screen is disabled while the computer "thinks" to prevent accidental moves.
-- **Visual Effects:** Smooth animations, turn indicators, and a confetti celebration for winners.
-- **Lightweight:** Zero dependencies. Just one HTML file.
+- **Rules Modal:** In-game instructions available at any time via the "Rules" button.
+- **Visual Celebration:** Confetti animations and custom victory/defeat messages.
+- **Lightweight:** Zero external dependencies—runs entirely in a single HTML file.
 
-## 🛠️ Technical Details
+## 🛠️ Technical Stack
 
-- **Language:** JavaScript (ES6+), HTML5, CSS3.
-- **Rendering:** High-DPI Canvas scaling for crisp graphics on mobile and retina screens.
-- **AI Logic:** Conditional probability-based decision making for the "Difficult" setting.
+- **Graphics:** HTML5 Canvas API.
+- **Logic:** Vanilla JavaScript (ES6+).
+- **Styling:** CSS3 with Flexbox and CSS Variables.
+- **Responsiveness:** Dynamic coordinate scaling based on device aspect ratio.
 
-## 📂 Installation
+## 📂 Installation & Deployment
 
-1. Clone this repository.
-2. Open `index.html` in any modern web browser.
-3. Enjoy the game!
-
----
-*Created with ❤️ for humans who think they can beat the machine.*
+1. Clone this repository:
+   ```bash
+   git clone https://github.com
