@@ -1,0 +1,233 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no" />
+<title>AK47 Card Game</title>
+<style>
+  :root{ --bg:#1a472a; --btn:#4CAF50; --gold:#ffd700; --blue:#2196F3; }
+  html, body { height: 100%; margin: 0; background: var(--bg); font-family: system-ui, sans-serif; color: #fff; overflow: hidden; touch-action: none; }
+  body { display: flex; flex-direction: column; align-items: center; }
+  #controls { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; padding: 10px; z-index: 10; }
+  button { padding: 8px 16px; border: 0; border-radius: 20px; color: #fff; font-weight: 700; background: #333; cursor: pointer; font-size: 12px; transition: 0.2s; }
+  button.active { background: var(--btn); box-shadow: 0 0 10px var(--btn); }
+  #newGame { background: var(--blue); }
+  #infoBtn { background: #666; }
+  
+  #status { font-weight: bold; font-size: 18px; margin: 5px; height: 24px; color: var(--gold); text-shadow: 0 2px 4px rgba(0,0,0,0.5); }
+  .canvasContainer { flex: 1; display: flex; align-items: center; justify-content: center; width: 100%; position: relative; }
+  canvas { max-width: 100%; max-height: 75vh; display: block; }
+  
+  #inputBlocker { position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.1); display: none; z-index: 20; cursor: wait; }
+
+  #modal { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 85%; max-width: 400px; background: #fff; color: #333; padding: 20px; border-radius: 15px; box-shadow: 0 0 50px rgba(0,0,0,0.8); z-index: 100; display: none; }
+  #modal h2 { margin-top: 0; color: var(--bg); }
+  #modal p, #modal li { font-size: 14px; line-height: 1.5; }
+  #modal .close-btn { background: var(--bg); color: white; width: 100%; margin-top: 15px; padding: 10px; border:0; border-radius: 10px; cursor: pointer; }
+  #overlay { position: fixed; top:0; left:0; width:100%; height:100%; background: rgba(0,0,0,0.7); z-index: 90; display: none; }
+</style>
+</head>
+<body>
+  <div id="controls">
+    <button id="btn-easy" class="active" onclick="setDiff('easy')">EASY</button>
+    <button id="btn-medium" onclick="setDiff('medium')">MEDIUM</button>
+    <button id="btn-hard" onclick="setDiff('hard')">DIFFICULT</button>
+    <button id="newGame" onclick="initGame()">NEW GAME</button>
+    <button id="infoBtn" onclick="toggleModal(true)">RULES</button>
+  </div>
+  
+  <div id="status">Your Turn</div>
+
+  <div class="canvasContainer">
+    <div id="inputBlocker"></div>
+    <canvas id="gameCanvas" width="720" height="900"></canvas>
+  </div>
+
+  <div id="overlay" onclick="toggleModal(false)"></div>
+  <div id="modal">
+    <h2>How to Play AK47</h2>
+    <p>Collect <b>Ace, King, 4, and 7</b> to win.</p>
+    <ul>
+      <li><b>Draw:</b> Drag a card from the <b>Deck</b> or <b>Discard Pile</b>.</li>
+      <li><b>Swap:</b> Drop the card onto your hand to replace one.</li>
+      <li><b>Discard:</b> Drop anywhere else to discard it.</li>
+      <li><b>AI:</b> On Hard mode, the machine blocks cards you need!</li>
+    </ul>
+    <button class="close-btn" onclick="toggleModal(false)">Got it!</button>
+  </div>
+
+<script>
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+const statusEl = document.getElementById('status');
+const blocker = document.getElementById('inputBlocker');
+const BASE_W = 720, BASE_H = 900;
+
+let deck = [], user, comp, discardPile = [];
+let draggingCard = null, pointer = { x: 0, y: 0 };
+let over = false, turn = 'user';
+let difficulty = 'easy', userHistory = new Set(), particles = [];
+
+function toggleModal(show) {
+  document.getElementById('modal').style.display = show ? 'block' : 'none';
+  document.getElementById('overlay').style.display = show ? 'block' : 'none';
+}
+
+function setDiff(d) {
+  difficulty = d;
+  ['easy', 'medium', 'hard'].forEach(lvl => {
+    document.getElementById(`btn-${lvl}`).classList.toggle('active', lvl === d);
+  });
+  render();
+}
+
+function getPos(e) {
+  const rect = canvas.getBoundingClientRect();
+  const cX = e.touches ? e.touches[0].clientX : e.clientX;
+  const cY = e.touches ? e.touches[0].clientY : e.clientY;
+  return { x: (cX - rect.left) * (BASE_W / rect.width), y: (cY - rect.top) * (BASE_H / rect.height) };
+}
+
+class Card {
+  constructor(s, r) { this.suit = s; this.rank = r; }
+  rankStr() { return (this.rank===1?"A":this.rank===11?"J":this.rank===12?"Q":this.rank===13?"K":String(this.rank)); }
+  suitSym() { return ["♥","♦","♣","♠"][this.suit]; }
+  draw(ctx, x, y, hide = false) {
+    ctx.save(); ctx.translate(x, y);
+    ctx.beginPath(); ctx.roundRect(0, 0, 110, 160, 12);
+    ctx.fillStyle = hide ? "#2d6a4f" : "#fff"; ctx.fill();
+    ctx.strokeStyle = "#000"; ctx.lineWidth = 2; ctx.stroke();
+    if(!hide) {
+      ctx.fillStyle = this.suit < 2 ? "#e63946" : "#2b2d42"; ctx.textAlign = "center";
+      ctx.font = "bold 24px sans-serif"; ctx.fillText(this.rankStr()+this.suitSym(), 35, 35);
+      ctx.font = "60px sans-serif"; ctx.fillText(this.suitSym(), 55, 105);
+    }
+    ctx.restore();
+  }
+}
+
+class Hand {
+  constructor() { this.cards = []; }
+  sort() {
+    const goal = [1, 13, 4, 7];
+    this.cards.sort((a,b) => (goal.indexOf(a.rank)===-1?99:goal.indexOf(a.rank)) - (goal.indexOf(b.rank)===-1?99:goal.indexOf(b.rank)));
+  }
+  isWin() { 
+    const r = this.cards.map(c => c.rank);
+    return [1, 13, 4, 7].every(val => r.includes(val)); 
+  }
+}
+
+function initGame() {
+  deck = []; userHistory.clear(); particles = [];
+  for(let s=0; s<4; s++) for(let r=1; r<=13; r++) deck.push(new Card(s, r));
+  deck.sort(() => Math.random() - 0.5);
+  user = new Hand(); comp = new Hand();
+  for(let i=0; i<4; i++) { user.cards.push(deck.pop()); comp.cards.push(deck.pop()); }
+  user.sort(); comp.sort();
+  discardPile = [deck.pop()];
+  over = false; turn = 'user';
+  blocker.style.display = 'none';
+  statusEl.innerText = "Your Turn";
+  render();
+}
+
+function render() {
+  ctx.clearRect(0,0, BASE_W, BASE_H);
+  comp.cards.forEach((c, i) => c.draw(ctx, 80 + i*140, 80, difficulty !== 'easy'));
+  if(deck.length) (new Card(0,0)).draw(ctx, 180, 350, true);
+  if(discardPile.length) discardPile[discardPile.length-1].draw(ctx, 420, 350);
+  user.cards.forEach((c, i) => c.draw(ctx, 80 + i*140, 630));
+  if(draggingCard) draggingCard.draw(ctx, pointer.x - 55, pointer.y - 80);
+  if(over) {
+    ctx.fillStyle = "rgba(0,0,0,0.8)"; ctx.fillRect(0,0,BASE_W,BASE_H);
+    ctx.fillStyle = "#fff"; ctx.textAlign = "center";
+    if(user.isWin()) {
+      ctx.font = "bold 60px sans-serif"; ctx.fillText("HUMAN WINS! 🏆", BASE_W/2, BASE_H/2);
+    } else {
+      ctx.font = "bold 32px sans-serif";
+      ctx.fillText("Sorry you lost to a machine,", BASE_W/2, BASE_H/2 - 20);
+      ctx.fillText("WoooooH computer won against human!", BASE_W/2, BASE_H/2 + 30);
+    }
+    updateConfetti();
+  }
+}
+
+function handleDown(e) {
+  if(over || turn !== 'user') return;
+  const p = getPos(e); pointer = p;
+  if(p.x > 180 && p.x < 290 && p.y > 350 && p.y < 510 && deck.length) draggingCard = deck.pop();
+  else if(p.x > 420 && p.x < 530 && p.y > 350 && p.y < 510 && discardPile.length) draggingCard = discardPile.pop();
+  render();
+}
+
+function handleMove(e) { if(draggingCard) { pointer = getPos(e); render(); } }
+
+function handleUp() {
+  if(!draggingCard) return;
+  let swapped = false;
+  for(let i=0; i<4; i++) {
+    let x = 80 + i*140;
+    if(pointer.x > x && pointer.x < x+110 && pointer.y > 600) {
+      userHistory.add(user.cards[i].rank);
+      discardPile.push(user.cards[i]); user.cards[i] = draggingCard;
+      swapped = true; break;
+    }
+  }
+  if(!swapped) { userHistory.add(draggingCard.rank); discardPile.push(draggingCard); }
+  draggingCard = null; user.sort();
+  if(user.isWin()) { over = true; spawnConfetti(); statusEl.innerText = "Winner!"; } 
+  else { setTurn('cpu'); cpuTurn(); }
+  render();
+}
+
+function setTurn(t) {
+  turn = t;
+  blocker.style.display = t === 'cpu' ? 'block' : 'none';
+  statusEl.innerText = t === 'cpu' ? "Machine is thinking..." : "Your Turn";
+}
+
+function cpuTurn() {
+  setTimeout(() => {
+    let c = deck.pop(), g = [1, 13, 4, 7], has = comp.cards.map(card=>card.rank), done = false;
+    if(g.includes(c.rank) && !has.includes(c.rank)) {
+      for(let i=0; i<4; i++) {
+        let cur = comp.cards[i].rank;
+        if(!g.includes(cur) || (difficulty==='hard' && userHistory.has(cur))) {
+          discardPile.push(comp.cards[i]); comp.cards[i] = c; done = true; break;
+        }
+      }
+    }
+    if(!done) discardPile.push(c);
+    comp.sort();
+    if(comp.isWin()) { over = true; spawnConfetti(); statusEl.innerText = "CPU Wins!"; } 
+    else { setTurn('user'); }
+    render();
+  }, 1500);
+}
+
+function spawnConfetti() {
+  for(let i=0; i<120; i++) particles.push({ x: Math.random()*BASE_W, y: -20, v: 2+Math.random()*6, c: `hsl(${Math.random()*360}, 80%, 50%)`, sz: 6+Math.random()*12, ang: Math.random()*6 });
+  requestAnimationFrame(anim);
+}
+
+function updateConfetti() {
+  particles.forEach(p => {
+    ctx.fillStyle = p.c; ctx.save(); ctx.translate(p.x, p.y); ctx.rotate(p.ang);
+    ctx.fillRect(-p.sz/2, -p.sz/2, p.sz, p.sz); ctx.restore();
+    p.y += p.v; p.ang += 0.05;
+  });
+}
+
+function anim() { if(over) { render(); requestAnimationFrame(anim); } }
+
+canvas.addEventListener('mousedown', handleDown);
+window.addEventListener('mousemove', handleMove);
+window.addEventListener('mouseup', handleUp);
+canvas.addEventListener('touchstart', (e) => { if(e.target === canvas) e.preventDefault(); handleDown(e); }, {passive:false});
+window.addEventListener('touchmove', (e) => { if(e.target === canvas) e.preventDefault(); handleMove(e); }, {passive:false});
+window.addEventListener('touchend', (e) => { if(e.target === canvas) e.preventDefault(); handleUp(); }, {passive:false});
+initGame();
+</script>
+</body>
+</html>
