@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover" />
   <title>AK47 Card Game – Smarter AI & Better Drag</title>
   <style>
     * {
@@ -24,7 +24,7 @@
       font-family: system-ui, 'Segoe UI', 'Roboto', sans-serif;
       color: #fff;
       overflow: hidden;
-      touch-action: none;
+      touch-action: pan-y pinch-zoom; /* allow vertical scroll if needed, but we prevent on canvas */
     }
     body {
       display: flex;
@@ -38,10 +38,11 @@
       gap: 10px;
       justify-content: center;
       padding: 12px 8px;
-      z-index: 15;
+      z-index: 30;
       background: rgba(0,0,0,0.2);
-      border-radius: 40px;
+      border-radius: 50px;
       margin-top: 8px;
+      pointer-events: auto; /* ensure clicks pass */
     }
     button {
       padding: 8px 18px;
@@ -55,6 +56,11 @@
       transition: 0.2s;
       letter-spacing: 0.5px;
       box-shadow: 0 2px 6px rgba(0,0,0,0.3);
+      touch-action: manipulation;  /* improves responsiveness on mobile */
+      pointer-events: auto;
+    }
+    button:active {
+      transform: scale(0.96);
     }
     button.active {
       background: var(--btn);
@@ -73,6 +79,8 @@
       padding: 5px 16px;
       border-radius: 60px;
       backdrop-filter: blur(2px);
+      pointer-events: none;
+      z-index: 20;
     }
     .canvasContainer {
       flex: 1;
@@ -82,6 +90,7 @@
       width: 100%;
       position: relative;
       min-height: 0;
+      touch-action: pan-y pinch-zoom;
     }
     canvas {
       max-width: 98%;
@@ -90,6 +99,7 @@
       border-radius: 20px;
       box-shadow: 0 10px 25px rgba(0,0,0,0.3);
       cursor: grab;
+      touch-action: none;  /* canvas itself handles drag, no page scroll while dragging */
     }
     canvas:active {
       cursor: grabbing;
@@ -105,6 +115,7 @@
       z-index: 25;
       backdrop-filter: blur(3px);
       border-radius: 20px;
+      pointer-events: none; /* blocker only visual, buttons stay clickable */
     }
     #modal {
       position: fixed;
@@ -121,6 +132,7 @@
       z-index: 100;
       display: none;
       font-family: system-ui;
+      pointer-events: auto;
     }
     #modal h2 {
       margin-top: 0;
@@ -140,6 +152,7 @@
       border: 0;
       border-radius: 40px;
       font-weight: bold;
+      touch-action: manipulation;
     }
     #overlay {
       position: fixed;
@@ -150,6 +163,7 @@
       background: rgba(0,0,0,0.75);
       z-index: 90;
       display: none;
+      pointer-events: auto;
     }
     @media (max-width: 600px) {
       button { padding: 6px 12px; font-size: 11px; }
@@ -182,6 +196,7 @@
     <li><b>🔄 Swap:</b> Drop the dragged card onto <b>your hand</b> to replace a card.</li>
     <li><b>🗑️ Discard:</b> Drop anywhere else to discard it.</li>
     <li><b>👆 Drag fix:</b> Card now floats <b>above your finger</b> for better visibility.</li>
+    <li><b>📱 Buttons:</b> Fully clickable on mobile (fixed touch interference).</li>
   </ul>
   <button class="close-btn" onclick="toggleModal(false)">Got it! ⚡</button>
 </div>
@@ -196,16 +211,17 @@
 
     // Game state
     let deck = [];
-    let user = null;       // Hand instance
-    let comp = null;       // Hand instance
+    let user = null;
+    let comp = null;
     let discardPile = [];
     let draggingCard = null;
     let pointer = { x: 0, y: 0 };
     let over = false;
     let turn = 'user';
     let difficulty = 'easy';
-    let userHistory = new Set();   // tracks ranks user has ever held (for legacy + hard blocking)
+    let userHistory = new Set();
     let particles = [];
+    let isDraggingActive = false;   // to conditionally prevent touchmove on window
 
     // ========== Helper: RoundRect ==========
     if (!CanvasRenderingContext2D.prototype.roundRect) {
@@ -225,7 +241,6 @@
       };
     }
 
-    // Card class
     class Card {
       constructor(s, r) { this.suit = s; this.rank = r; }
       rankStr() { return (this.rank===1?"A":this.rank===11?"J":this.rank===12?"Q":this.rank===13?"K":String(this.rank)); }
@@ -306,7 +321,6 @@
       return { x, y };
     }
 
-    // win animation
     function spawnConfetti() {
       particles = [];
       for (let i = 0; i < 140; i++) {
@@ -341,65 +355,42 @@
       }
     }
 
-    // ========== AI core logic (with discard consideration for medium/hard) ==========
-    // Compute which ranks user is missing from AK47 set (for blocking)
+    // ========== AI core ==========
     function getUserMissingRanks() {
       if (!user) return [1,13,4,7];
       const userRanks = new Set(user.cards.map(c => c.rank));
       return [1,13,4,7].filter(r => !userRanks.has(r));
     }
 
-    // Evaluate how valuable a card is for AI (higher = better to keep)
     function evaluateCardForAI(card, aiHand, userMissing, diff, aiRanksSet) {
       let score = 0;
       const neededSet = [1,13,4,7];
       const isAK47 = neededSet.includes(card.rank);
       const aiAlreadyHas = aiRanksSet.has(card.rank);
       
-      // 1. Does AI need this to complete its own win condition?
-      if (isAK47 && !aiAlreadyHas) {
-        score += 30;   // huge priority - missing piece
-      }
-      
-      // 2. Hard mode: blocking the user from winning (user missing this rank)
+      if (isAK47 && !aiAlreadyHas) score += 30;
       if (diff === 'hard' && userMissing.includes(card.rank)) {
-        // Even if AI already has it, blocking is valuable (hoard)
         if (!aiAlreadyHas) score += 25;
-        else score += 15;   // duplicate but still denies user
+        else score += 15;
       }
-      
-      // 3. Medium/Hard: if it's an AK47 but duplicate, minor value (can replace weak card)
-      if (isAK47 && aiAlreadyHas && diff !== 'easy') {
-        score += 5;
-      }
-      
+      if (isAK47 && aiAlreadyHas && diff !== 'easy') score += 5;
       return score;
     }
     
-    // Find weakest card index in AI hand (best to replace)
-    // priority: non-AK47 first, then duplicate AK47, then any card that is less useful for blocking
     function getWeakestCardIndex(aiHand, userMissing, diff) {
       const needed = [1,13,4,7];
       let bestIdx = -1;
       let lowestPriority = 999;
-      
       for (let i = 0; i < aiHand.cards.length; i++) {
         const card = aiHand.cards[i];
         let priority = 0;
         const isNeeded = needed.includes(card.rank);
-        // Count duplicates in hand
         const duplicateCount = aiHand.cards.filter(c => c.rank === card.rank).length;
         const isDuplicate = duplicateCount > 1;
-        
-        if (!isNeeded) priority = 0;     // highest discard priority
+        if (!isNeeded) priority = 0;
         else if (isDuplicate) priority = 1;
-        else priority = 2;   // essential unique AK47, keep unless blocking gives better
-        
-        // If hard mode & this card is also a user-missing blocker, give extra protection (harder to discard)
-        if (diff === 'hard' && userMissing.includes(card.rank)) {
-          priority += 3;   // make it less likely to discard blocker
-        }
-        
+        else priority = 2;
+        if (diff === 'hard' && userMissing.includes(card.rank)) priority += 3;
         if (priority < lowestPriority) {
           lowestPriority = priority;
           bestIdx = i;
@@ -408,80 +399,49 @@
       return bestIdx;
     }
 
-    // AI turn: choose best card from DECK or DISCARD (medium/hard) and decide swap/discard
     async function cpuTurn() {
       if (over || turn !== 'cpu') return;
-      
-      // short delay for dramatic effect
-      await new Promise(r => setTimeout(r, 500));
+      await new Promise(r => setTimeout(r, 480));
       if (over || turn !== 'cpu') return;
       
-      // 1. Gather candidates (source & card)
       let candidates = [];
-      if (deck.length > 0) {
-        candidates.push({ card: deck[deck.length-1], source: 'deck', idx: deck.length-1 });
-      }
-      // Medium & hard consider discard pile; easy does NOT (only deck)
+      if (deck.length > 0) candidates.push({ card: deck[deck.length-1], source: 'deck', idx: deck.length-1 });
       if ((difficulty === 'medium' || difficulty === 'hard') && discardPile.length > 0) {
         candidates.push({ card: discardPile[discardPile.length-1], source: 'discard', idx: discardPile.length-1 });
       }
-      
       if (candidates.length === 0) {
-        // No cards available (edge case)
         setTurn('user');
         render();
         return;
       }
-      
-      // 2. Compute AI hand info
       const aiRanksSet = comp.getRanksSet();
       const userMissing = getUserMissingRanks();
-      
-      // 3. Evaluate each candidate and pick best
       let bestCandidate = null;
       let bestScore = -1;
       for (let cand of candidates) {
         let score = evaluateCardForAI(cand.card, comp, userMissing, difficulty, aiRanksSet);
-        // slight tie-breaker: prefer discard if score equal (more strategic)
         if (score > bestScore || (score === bestScore && cand.source === 'discard')) {
           bestScore = score;
           bestCandidate = cand;
         }
       }
-      
-      // 4. Take the chosen card from its source
       let takenCard = null;
-      if (bestCandidate.source === 'deck') {
-        takenCard = deck.pop();
-      } else {
-        takenCard = discardPile.pop();
-      }
+      if (bestCandidate.source === 'deck') takenCard = deck.pop();
+      else takenCard = discardPile.pop();
       
-      // 5. Decide to keep (swap) or discard
-      const keepThreshold = (difficulty === 'hard') ? 5 : 8;  // hard blocks even moderate cards
+      const keepThreshold = (difficulty === 'hard') ? 5 : 8;
       let swapped = false;
-      
       if (bestScore >= keepThreshold) {
-        // Try to swap with weakest card in AI hand
         const weakIdx = getWeakestCardIndex(comp, userMissing, difficulty);
         if (weakIdx !== -1) {
-          // swap: put old card to discard, keep new card
-          const oldCard = comp.cards[weakIdx];
-          discardPile.push(oldCard);
+          discardPile.push(comp.cards[weakIdx]);
           comp.cards[weakIdx] = takenCard;
           swapped = true;
         }
       }
-      
-      if (!swapped) {
-        // not beneficial: discard the taken card directly
-        discardPile.push(takenCard);
-      }
-      
-      // sort AI hand & check win
+      if (!swapped) discardPile.push(takenCard);
       comp.sort();
       render();
-      
       if (comp.isWin()) {
         over = true;
         statusEl.innerText = "🤖 COMPUTER WINS! 🤖";
@@ -489,8 +449,6 @@
         render();
         return;
       }
-      
-      // pass turn to user
       setTurn('user');
       render();
     }
@@ -500,18 +458,11 @@
       deck = [];
       userHistory.clear();
       particles = [];
-      // build fresh deck
-      for (let s = 0; s < 4; s++) {
-        for (let r = 1; r <= 13; r++) {
-          deck.push(new Card(s, r));
-        }
-      }
-      // shuffle
+      for (let s = 0; s < 4; s++) for (let r = 1; r <= 13; r++) deck.push(new Card(s, r));
       for (let i = deck.length - 1; i > 0; i--) {
         const j = Math.floor(Math.random() * (i + 1));
         [deck[i], deck[j]] = [deck[j], deck[i]];
       }
-      
       user = new Hand();
       comp = new Hand();
       for (let i = 0; i < 4; i++) {
@@ -520,69 +471,69 @@
       }
       user.sort();
       comp.sort();
-      // first discard from deck
       discardPile = [deck.pop()];
       over = false;
       turn = 'user';
       blocker.style.display = 'none';
+      isDraggingActive = false;
       statusEl.innerText = "🎲 Your Turn! Drag a card 🎲";
       render();
     }
     
     function setTurn(t) {
       turn = t;
-      blocker.style.display = (t === 'cpu') ? 'block' : 'none';
       if (t === 'cpu') {
+        blocker.style.display = 'block';
         statusEl.innerText = "🤔 AI is thinking ... 🤔";
         cpuTurn();
       } else {
+        blocker.style.display = 'none';
         statusEl.innerText = "🎴 Drag a card (Deck or Discard) 🎴";
       }
     }
     
-    // ========== Drag & Drop handling (with vertical offset so finger doesn't hide card) ==========
+    // ========== Drag & Drop with improved offset + mobile button safety ==========
     function handleDown(e) {
       if (over || turn !== 'user') return;
+      // Ensure target is canvas (avoid stealing from buttons)
+      const target = e.target;
+      if (target !== canvas) return;
       e.preventDefault();
       const p = getPos(e);
       pointer = p;
-      
-      // Check Deck (180-290 x , 350-510 y)
       const deckRect = { x: 180, y: 350, w: 110, h: 160 };
       const discardRect = { x: 420, y: 350, w: 110, h: 160 };
-      
       if (p.x > deckRect.x && p.x < deckRect.x + deckRect.w && p.y > deckRect.y && p.y < deckRect.y + deckRect.h && deck.length) {
         draggingCard = deck.pop();
-      }
-      else if (p.x > discardRect.x && p.x < discardRect.x + discardRect.w && p.y > discardRect.y && p.y < discardRect.y + discardRect.h && discardPile.length) {
+        isDraggingActive = true;
+      } else if (p.x > discardRect.x && p.x < discardRect.x + discardRect.w && p.y > discardRect.y && p.y < discardRect.y + deckRect.h && discardPile.length) {
         draggingCard = discardPile.pop();
+        isDraggingActive = true;
       }
       render();
     }
     
     function handleMove(e) {
-      if (!draggingCard) return;
-      e.preventDefault();
+      if (!draggingCard || !isDraggingActive) return;
+      e.preventDefault();  // only prevent when actually dragging
       pointer = getPos(e);
       render();
     }
     
     function handleUp(e) {
       if (!draggingCard) {
+        if (isDraggingActive) isDraggingActive = false;
         render();
         return;
       }
       e.preventDefault();
       let swapped = false;
       const dropPos = pointer;
-      
-      // Check if drop onto user hand slots (4 slots)
       for (let i = 0; i < 4; i++) {
         let slotX = 80 + i * 140;
         let slotY = 630;
         let slotW = 110, slotH = 160;
         if (dropPos.x > slotX && dropPos.x < slotX + slotW && dropPos.y > slotY && dropPos.y < slotY + slotH) {
-          // Swap with that card
           userHistory.add(user.cards[i].rank);
           discardPile.push(user.cards[i]);
           user.cards[i] = draggingCard;
@@ -590,17 +541,14 @@
           break;
         }
       }
-      
       if (!swapped) {
-        // discard anywhere else
         userHistory.add(draggingCard.rank);
         discardPile.push(draggingCard);
       }
-      
       draggingCard = null;
+      isDraggingActive = false;
       user.sort();
       render();
-      
       if (user.isWin()) {
         over = true;
         statusEl.innerText = "🏆 YOU WIN! AMAZING! 🏆";
@@ -608,35 +556,26 @@
         render();
         return;
       }
-      
-      // Pass turn to AI
       setTurn('cpu');
     }
     
     // ========== Render canvas ==========
     function render() {
       ctx.clearRect(0, 0, BASE_W, BASE_H);
-      
-      // ---- Computer hand (top) ----
       comp.cards.forEach((card, idx) => {
         const hideBack = (difficulty !== 'easy');
         card.draw(ctx, 80 + idx * 140, 80, hideBack);
       });
-      
-      // ---- Deck (left) ----
       if (deck.length) {
         new Card(0,0).draw(ctx, 180, 350, true);
         ctx.fillStyle = "#FFE484";
         ctx.font = "bold 14px monospace";
-        ctx.shadowBlur = 0;
         ctx.fillText(`${deck.length} cards`, 215, 420);
       } else {
         ctx.fillStyle = "#c9b36b";
         ctx.font = "bold 14px system-ui";
         ctx.fillText("Empty", 220, 420);
       }
-      
-      // ---- Discard pile (right) ----
       if (discardPile.length) {
         discardPile[discardPile.length-1].draw(ctx, 420, 350, false);
         ctx.fillStyle = "#FFF2C9";
@@ -646,18 +585,12 @@
         ctx.fillStyle = "#aaa";
         ctx.fillText("⚡ empty", 460, 430);
       }
-      
-      // ---- User hand ----
       user.cards.forEach((card, idx) => {
         card.draw(ctx, 80 + idx * 140, 630, false);
       });
-      
-      // ---- Dragging card (offset upward so finger doesn't block value) ----
       if (draggingCard) {
-        // shift card upward by 45px extra so it floats above finger tip
         let dragX = pointer.x - 55;
-        let dragY = pointer.y - 130;   // raised significantly
-        // clamp to canvas boundaries
+        let dragY = pointer.y - 130;   // raised so finger doesn't hide value
         dragX = Math.min(Math.max(dragX, 10), BASE_W - 120);
         dragY = Math.min(Math.max(dragY, 10), BASE_H - 170);
         ctx.save();
@@ -666,8 +599,6 @@
         draggingCard.draw(ctx, dragX, dragY, false);
         ctx.restore();
       }
-      
-      // ---- Game over overlay ----
       if (over) {
         ctx.fillStyle = "rgba(0,0,0,0.85)";
         ctx.fillRect(0, 0, BASE_W, BASE_H);
@@ -690,18 +621,35 @@
       }
     }
     
-    // ---- Event binding with touch & mouse ----
+    // ========== Event binding with mobile-friendly conditional prevent ==========
     function attachEvents() {
       canvas.addEventListener('mousedown', handleDown);
       window.addEventListener('mousemove', handleMove);
       window.addEventListener('mouseup', handleUp);
       
-      canvas.addEventListener('touchstart', (e) => { e.preventDefault(); handleDown(e); }, { passive: false });
-      window.addEventListener('touchmove', (e) => { e.preventDefault(); handleMove(e); }, { passive: false });
-      window.addEventListener('touchend', (e) => { e.preventDefault(); handleUp(e); }, { passive: false });
+      canvas.addEventListener('touchstart', (e) => {
+        if (e.target === canvas) {
+          e.preventDefault();
+          handleDown(e);
+        }
+      }, { passive: false });
+      
+      window.addEventListener('touchmove', (e) => {
+        if (isDraggingActive) {
+          e.preventDefault();
+          handleMove(e);
+        }
+      }, { passive: false });
+      
+      window.addEventListener('touchend', (e) => {
+        if (isDraggingActive) {
+          e.preventDefault();
+          handleUp(e);
+        }
+      }, { passive: false });
     }
     
-    // expose globals for inline buttons
+    // Expose globals
     window.setDiff = setDiff;
     window.initGame = initGame;
     window.toggleModal = toggleModal;
